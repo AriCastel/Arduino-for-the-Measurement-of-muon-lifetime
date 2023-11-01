@@ -1,31 +1,30 @@
 """
 * Windows Host Code for LYMX interface
 * By Alex Artemis Castelblanco
-* version 0.01 pre release
-* Developed for the proyect: 
+* version 0.1.0 Beta
+* Developed for the project: 
   "Implementation of an Arduino-based platform for the measurement of the Muon's mean Lifetime"
 """
 
 import time 
 import logging
 import serial
-from datetime import datetime
-
+import ctypes
 
 #Initializes the Arduino Board
 def sketch_Load():
     logging.debug("sketch_Load was called but the function is not yet usable: Make sure to use the IDE to load the Sketch Manually")
 
 
-#Period Calculation        
-def period(T1, T2, TOVF=0, preScale = 1, ClockM=16):
+#Calculates time interval between 2 Signals        
+def period(T1, T2, TOVF=0, preScale = 1, ClockM=16, scale=6):
     if T2 > T1:
         count = T2 - T1
     elif TOVF>0:
         count = T2 - T1 + 65536*TOVF
     else:
         count = 1
-    micras = count*(preScale/(ClockM*(10**6)))
+    micras = count*(preScale/(ClockM*(10**6)))*(10**scale)
     logging.debug(f"Period Calculated as {micras}")
     return micras 
 
@@ -42,10 +41,10 @@ def save(data, file_name):
         logging.error(f"Error: {e}")    
 
 #Code Initialization
-def serInit(arduino_port = 'COM6', baud_rate = 115200):
+def serInit(arduino_port = 'COM3', baud_rate = 115200):
     
     #Sets up the Terminal Print Logging and Debugging  
-    level = logging.DEBUG
+    level = logging.INFO
     fmt = '[%(levelname)s] %(asctime)s - %(message)s'
     logging.basicConfig(level=level, format=fmt)
 
@@ -62,12 +61,12 @@ def serInit(arduino_port = 'COM6', baud_rate = 115200):
 
 
 #Main Loop
-def main(seri, file_Name, experiment_Duration = 3, save_Interval = 1):
+def main(seri, file_Name, experiment_Duration = 60, save_Interval = 5):
     Data = []
     end_time = time.time() + (experiment_Duration * 60)
     last_save = time.time()
 
-    
+#Reads the Data from Serial    
     try:
         while time.time() < end_time:
             # Read the data sent by Arduino
@@ -82,11 +81,14 @@ def main(seri, file_Name, experiment_Duration = 3, save_Interval = 1):
                 TOVF = int(TOVF_str)
                 timestamp = time.ctime()
                 lapse = period(T1, T2, TOVF)
-                event = (lapse, timestamp)
-                Data.append(event)
-                logging.debug(f"Event {event} logged successfully") 
+                if lapse  < 20 and lapse > 0.1:
+                    event = (lapse, timestamp) 
+                    Data.append(event)
+                    logging.info(f"Event {event} logged successfully")
+                else:
+                    logging.debug(f"Rejected measurement {lapse}")
             else:
-                logging.error("Timer Fail")
+                logging.debug("Data Acquisition Timeout")
             
             if time.time() - last_save >= save_Interval*60:
                 save(Data, file_Name)
@@ -94,13 +96,29 @@ def main(seri, file_Name, experiment_Duration = 3, save_Interval = 1):
                 last_save = time.time()
         seri.close()    
     except KeyboardInterrupt:
+        save(Data, file_Name)
+        logging.info(f"Manual Interruption")
+        logging.info(f"Data autosaved as {file_Name} at {time.ctime()}")
+        logging.info(f"Finishing Measurement")
         seri.close()
-                
+    except Exception as e:
+        errorTime = time.ctime().replace(" ", "")
+        logging.error(f"Error: {e}")
+        save(Data, f"{file_Name}_recovery")
         
      
-     
+#Prevent Windows from Sleeping
+insomnia = input("Prevent Computer from entering Sleep mode: Y/N ")
+if insomnia == "Y":
+    ES_CONTINUOUS = 0x80000000
+    ES_SYSTEM_REQUIRED = 0x00000001
+    ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
 
+#Code Execution 
 serial = serInit()
 logging.info(f"Experiment Started at {time.ctime()}")
 main(serial, "TestRun")
 logging.info(f"Experiment Ended at {time.ctime()}")
+
+if insomnia == "Y":
+    ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
